@@ -704,13 +704,13 @@ class MidiFile(object):
 
 
 class CliShell(object):
-    def __init__(self, midifile, infilename, outfilename):
-        output_fmt = outfilename.rsplit('.', 1)[-1]
-        assert output_fmt in ('csv', 'mid', 'mp3'), outfilename
+    def __init__(self, midifile, in_filename, out_filename):
+        output_fmt = out_filename.rsplit('.', 1)[-1]
+        assert output_fmt in ('csv', 'mid', 'mp3'), out_filename
 
         self.midifile = midifile
-        self.infilename = infilename
-        self.outfilename = outfilename
+        self.in_filename = in_filename
+        self.out_filename = out_filename
 
     def ask_questions(self):
         answers = []
@@ -731,9 +731,16 @@ class CliShell(object):
         return answers
 
     def process(self):
-        print('Reading file {}'.format(self.infilename))
-        with open(self.infilename, 'rb') as midifile:
-            self.midifile.load_mid(midifile)
+        print('Reading file {}'.format(self.in_filename))
+        with open(self.in_filename, 'rb') as fp:
+            if self.in_filename.lower().endswith('.mid'):
+                self.midifile.load_mid(fp)
+            elif self.in_filename.lower().endswith('.csv'):
+                self.midifile.load_csv(fp)
+            else:
+                raise NotImplementedError(
+                    'unexpected filename {filename}'.format(
+                        filename=self.in_filename))
         print()
 
         answers = self.ask_questions()
@@ -745,13 +752,13 @@ class CliShell(object):
                 print('-', answer)
             print()
 
-        print('Processing file {}'.format(self.infilename))
+        print('Processing file {}'.format(self.in_filename))
         self.midifile.process(answers)
         print()
 
-        print('Writing file {}'.format(self.outfilename))
-        with open(self.outfilename, 'wb') as outfile:
-            output_fmt = self.outfilename.rsplit('.', 1)[-1]
+        print('Writing file {}'.format(self.out_filename))
+        with open(self.out_filename, 'wb') as outfile:
+            output_fmt = self.out_filename.rsplit('.', 1)[-1]
             self.midifile.export(output_fmt, outfile)
         print()
 
@@ -789,8 +796,15 @@ class CgiShell(object):
         ''')
 
     def page_questions(self):
-        infile_name = self.form['midifile'].filename
-        self.midifile.load_mid(BytesIO(self.form['midifile'].file.read()))
+        in_filename = self.form['midifile'].filename
+        in_filedata = BytesIO(self.form['midifile'].file.read())
+        if in_filename.lower().endswith('.mid'):
+            self.midifile.load_mid(in_filedata)
+        elif in_filename.lower().endswith('.csv'):
+            self.mififile.load_csv(in_filedata)
+        else:
+            raise NotImplementedError('unexpected filename {filename}'.format(
+                filename=in_filename))
 
         # Compress the CSV file so we can reuse it after the questions.
         out = BytesIO()
@@ -800,13 +814,13 @@ class CgiShell(object):
 
         # Create new form.
         self.write('<h1>Choir MID alterations: options</h1>\n')
-        self.write('<em>{}</em>\n'.format(infile_name))
+        self.write('<em>{}</em>\n'.format(in_filename))
         self.write('<hr/>\n')
         self.write('''<form method="post">
             <input type="hidden" name="midifile_name" value="{midifile_name}"/>
             <input type="hidden" name="midicsv" value="{midicsv}"/>
         '''.format(
-            midifile_name=infile_name, midicsv=data))
+            midifile_name=in_filename, midicsv=data))
         for question in self.midifile.questions():
             self.write('''<p>{}</p><p>'''.format(question.description))
             for i, choice in enumerate(question.choices):
