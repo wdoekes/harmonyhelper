@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import cgi
 import cgitb
+import codecs
 import os
 import sys
 
@@ -304,7 +305,8 @@ class MidiFile(object):
 
     def export_csv(self, csvfile):
         for midicmd in self.data:
-            csvfile.write(self.to_line(midicmd).encode('ascii'))
+            line = self.to_line(midicmd).encode('utf-8')
+            csvfile.write(line)
 
     def export_mid(self, midifile):
         try:
@@ -367,8 +369,12 @@ class MidiFile(object):
 
     def load_csv(self, csvfile):
         self.cache = {}
-        self.data = [self.from_line(line.decode('ascii', 'replace'))
-                     for line in csvfile]
+        try:
+            self.data = [self.from_line(line.decode('latin1'))
+                         for line in csvfile]
+        except UnicodeDecodeError:
+            self.data = [self.from_line(line.decode('utf-8', 'replace'))
+                         for line in csvfile]
 
     def load_mid(self, midifile):
         try:
@@ -441,7 +447,7 @@ class CliShell(object):
 
     def process(self):
         print('Reading file {}'.format(self.infilename))
-        with open(self.infilename) as midifile:
+        with open(self.infilename, 'rb') as midifile:
             self.midifile.load_mid(midifile)
         print()
 
@@ -452,7 +458,7 @@ class CliShell(object):
         print()
 
         print('Writing file {}'.format(self.outfilename))
-        with open(self.outfilename, 'w') as outfile:
+        with open(self.outfilename, 'wb') as outfile:
             output_fmt = self.outfilename.rsplit('.', 1)[-1]
             self.midifile.export(output_fmt, outfile)
         print()
@@ -467,7 +473,7 @@ class CgiShell(object):
 
     def write(self, msg):
         if not self.started_output:
-            self.out.write('Content-Type: text/html\r\n\r\n')
+            self.out.write('Content-Type: text/html; charset=utf-8\r\n\r\n')
             self.started_output = True
         self.out.write(msg)
 
@@ -583,8 +589,22 @@ class CgiShell(object):
 if __name__ == '__main__':
     midifile = MidiFile()
     if os.environ.get('GATEWAY_INTERFACE'):
+        # Make sys.stdout utf-8 ready before creating exception trap hook.
+        # #sys.stdout.reconfigure(encoding='utf-8')  # py3.7+
+        buffer_ = sys.stdout.detach()
+        sys.stdout = codecs.getwriter('utf8')(buffer_)
+        sys.stdout.buffer = buffer_
         cgitb.enable()
+
         shell = CgiShell(midifile, cgi.FieldStorage(), sys.stdout)
+        try:
+            shell.process()
+        except Exception:
+            if not shell.started_output:
+                sys.stdout.write(
+                    'Content-Type: text/html; charset=utf-8\r\n\r\n')
+                shell.started_output = True
+            raise
     else:
         shell = CliShell(midifile, sys.argv[1], sys.argv[2])
-    shell.process()
+        shell.process()
