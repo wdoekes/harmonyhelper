@@ -274,6 +274,194 @@ class StripChords(MidiFilter):
                 self.midifile.data.pop(i)
 
 
+class AddMetronome(MidiFilter):
+    """
+    Adds metronome/hihat/clicks.
+    """
+    def get_time_signature(self):
+        class Timesignature:
+            def __init__(
+                    self, numerator, denominator, clocks_per_quarter,
+                    clocks_per_click):
+
+                self.time = (numerator, denominator)
+                # 32/32 for 4/4, 24/32 for 3/4 or 6/8
+                self.n32_per_bar = 32 / denominator * numerator
+                self.clocks_per_bar = self.n32_per_bar * clocks_per_quarter / 8
+                assert int(self.clocks_per_bar) == self.clocks_per_bar, (
+                    numerator, denominator, clocks_per_quarter,
+                    clocks_per_click)
+                self.clocks_per_bar = int(self.clocks_per_bar)
+
+            def get_velocities(self):
+                if self.time == (2, 2):
+                    return (127, 100)
+                elif self.time == (3, 4):
+                    return (127, 80, 80)
+                elif self.time == (2, 4):
+                    return (127, 127)
+                elif self.time == (4, 4):
+                    return (127, 80, 100, 80)
+                elif self.time == (6, 8):
+                    return (127, 80, 80, 127, 80, 80)
+                elif self.time == (6, 4):
+                    return (127, 80, 80, 127, 80, 80)  # XXX!
+                raise NotImplementedError(self.time)
+
+            def get_clicks(self):
+                velocities = self.get_velocities()
+                ret = []
+                clocks_per_numerator = self.clocks_per_bar // self.time[0]
+                for idx, clock in enumerate(range(
+                        0, self.clocks_per_bar, clocks_per_numerator)):
+                    ret.append((clock, velocities[idx]))
+                return tuple(ret)
+
+        # All MIDI Files should specify tempo and time signature.
+        # If they don't, the time signature is assumed to be 4/4,
+        # and the tempo 120 beats per minute.
+        # ...
+        # FF 58 04 nn dd cc bb Time Signature
+        # The time signature is expressed as four numbers. nn and
+        # dd represent the numerator and denominator of the time
+        # signature as it would be notated. The denominator is a
+        # negative power of two: 2 represents a quarter-note, 3
+        # represents an eighth-note, etc. The cc parameter
+        # expresses the number of MIDI clocks in a metronome click.
+        # The bb parameter expresses the number of notated
+        # 32nd-notes in a MIDI quarter-note (24 MIDI clocks). This
+        # was added because there are already multiple programs
+        # which allow a user to specify that what MIDI thinks of as
+        # a quarter-note (24 clocks) is to be notated as, or
+        # related to in terms of, something else.
+        #
+        # Therefore, the complete event for 6/8 time, where the
+        # metronome clicks every three eighth-notes, but there are
+        # 24 clocks per quarter-note, 72 to the bar, would be (in
+        # hex):
+        #
+        # FF 58 04 06 03 24 08
+        #
+        # That is, 6/8 time (8 is 2 to the 3rd power, so this is 06
+        # 03), 36 MIDI clocks per dotted-quarter (24 hex!), and
+        # eight notated 32nd-notes per quarter-note.
+        #
+        # Thus, the default is: 4/4, which is:
+        # ['4', '2' (2^2), '24' clocks per metronome click,
+        #  '8' 32nds per quarter]
+        clocks_per_quarter = self.midifile.data[0].vals[2]  # cmd='Header'
+        records = [
+            r for r in self.midifile.data if r.cmd == 'Time_signature']
+        if not records:
+            records = [
+                # notated_32nd_notes_per_beat=8
+                MidiCmd(
+                    track=1, pos=0, cmd='Time_signature', vals=[
+                        '4', '2', '24', '8'])]
+        if len(records) == 1:
+            pass
+        elif all(i.vals[0:2] in (['4', '2'], ['2', '2']) for i in records):
+            records = [records[0]]  # brrrr. temp workaround
+        else:
+            raise NotImplementedError(
+                'cannot handle multiple timesigs', records)
+        assert len(records[0].vals) == 4, records
+        assert records[0].vals[3] == '8', records
+
+        return Timesignature(
+            numerator=int(records[0].vals[0]),
+            denominator=(2 ** int(records[0].vals[1])),
+            clocks_per_quarter=int(clocks_per_quarter),
+            clocks_per_click=int(records[0].vals[2]))
+
+    def build_metronome_track(
+            self, start, end_ex, track, timesig, high_precision):
+        # On MIDI Channel 10, each MIDI Note number ("Key#")
+        # corresponds to a different drum sound.
+        channel = '9'  # of course 1-based-channel 10 is 9
+
+        # Rename for shorter identifiers below.
+        tr, chan = track, channel
+        del track, channel
+
+        ret = [
+            MidiCmd(track=tr, pos=0, cmd='Start_track', vals=[]),
+            MidiCmd(track=tr, pos=0, cmd='Title_t', vals=['"Metronome"']),
+            # #MidiCmd(track=tr, pos=0, cmd='Program_c', vals=[chan, '118']),
+            # # ^- hihat!
+            # Medium volume (7, 64)
+            MidiCmd(track=tr, pos=0, cmd='Control_c', vals=[chan, '7', '120']),
+            # Center panning (10, 64)
+            MidiCmd(track=tr, pos=0, cmd='Control_c', vals=[chan, '10', '64']),
+        ]
+        instrument = '42'  # 42 closed hihat # 108' # C6 # '42' # closed hihat
+        clicks = timesig.get_clicks()
+        click_size = (clicks[1][0] - clicks[0][0])
+        low_velocity = clicks[-1][1]
+        for pos in range(start, end_ex, timesig.clocks_per_bar):
+            for clock, velocity in clicks:
+                ret.append(MidiCmd(
+                    track=tr, pos=(pos + clock), cmd='Note_on_c', vals=[
+                        chan,           # channel
+                        instrument,     # note
+                        # velocity/hardness/volume:
+                        str(int(velocity * 0.7))]))
+                if high_precision:
+                    ret.append(MidiCmd(
+                        track=tr, pos=(pos + clock + click_size // 2),
+                        cmd='Note_on_c', vals=[
+                            chan,           # channel
+                            instrument,     # note
+                            # velocity/hardness/volume:
+                            str(int(low_velocity * 0.7))]))
+        ret.append(MidiCmd(
+            track=tr, pos=ret[-1].pos, cmd='End_track', vals=[]))
+        return ret
+
+    def questions(self):
+        return (
+            Question(
+                name='metronome',
+                description='Add metronome/hihat?',
+                choices=((0, 'no'), (1, 'yes'), (2, 'high precision'))),
+        )
+
+    def process(self, metronome=None, **answers):
+        if metronome:
+            # find min, find max
+            # add next unused track
+            # add tick every 4800??
+            min_pos = 0
+            max_pos = max(
+                r.pos for r in self.midifile.data
+                if r.cmd == 'Note_on_c') + 1
+            free_track = max(self.midifile.get_tracks().keys()) + 1
+            timesig = self.get_time_signature()
+
+            # Update track count in header
+            first = self.midifile.data[0]
+            assert (
+                first.track == 0 and first.pos == 0 and
+                first.cmd == 'Header'), first
+            assert (
+                len(first.vals) == 3 and
+                first.vals[1] == str(free_track - 1)), first
+            self.midifile.data[0] = MidiCmd(
+                track=0, pos=0, cmd='Header', vals=[
+                    first.vals[0], str(free_track), first.vals[2]])
+
+            # Pop end of file header
+            last = self.midifile.data.pop()
+            expected_eof = MidiCmd(track=0, pos=0, cmd='End_of_file', vals=[])
+            assert last == expected_eof, last
+
+            # Add data, and re-add end of file
+            high_precision = (metronome == 2)
+            self.midifile.data.extend(self.build_metronome_track(
+                min_pos, max_pos, free_track, timesig, high_precision))
+            self.midifile.data.append(last)
+
+
 class OutputFormat(MidiFilter):
     """
     Select output option: MID, MP3, CSV.
@@ -302,6 +490,7 @@ class MidiFile(object):
         HighlightTrack,
         ReplaceInstruments,
         StripChords,
+        AddMetronome,
         OutputFormat,
     )
 
