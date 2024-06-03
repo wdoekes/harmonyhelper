@@ -145,6 +145,41 @@ class HighlightTrack(MidiFilter):
                 self.midifile.data.insert(i, midicmd)
 
 
+class ReplaceInstruments(MidiFilter):
+    """
+    Replaces all instruments with 65 (
+    Removes the panning command because it may interfere with volume.
+    controls.
+    """
+    def has_instrument(self):
+        for i, midicmd in enumerate(self.midifile.data):
+            if midicmd.cmd == 'Program_c':
+                return True
+        return False
+
+    def questions(self):
+        if self.has_instrument():
+            return (
+                Question(
+                    name='replinstr',
+                    description=(
+                        'Do you wish to replace instruments? (MIDI '
+                        'instruments 1(piano)..128(gunshot))'),
+                    choices=((0, 'no'), (1, 'Piano'), (66, 'Alt Sax'))),
+            )
+        else:
+            return ()
+
+    def process(self, replinstr=None, **answers):
+        if replinstr:
+            instr0 = str(replinstr - 1)  # 0-based 7-bit instrument number
+            self.midifile.data = [
+                MidiCmd(x.track, x.pos, x.cmd, [x.vals[0], instr0])
+                if x.cmd == 'Program_c'
+                else x
+                for x in self.midifile.data]
+
+
 class StripChords(MidiFilter):
     """
     Lets you strip chords and leave only one of the notes.
@@ -265,6 +300,7 @@ class MidiFile(object):
     filters = (
         NoPanning,
         HighlightTrack,
+        ReplaceInstruments,
         StripChords,
         OutputFormat,
     )
