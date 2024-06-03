@@ -77,9 +77,13 @@ class HighlightTrack(MidiFilter):
                 name='hlpan',
                 description='Do you want to pan your track to the right?',
                 choices=((0, 'no'), (1, 'yes'))),
+            Question(
+                name='hlinv',
+                description='Reduce volume of the highlighted track instead?',
+                choices=((0, 'no'), (1, 'yes'))),
         )
 
-    def process(self, hltrack=None, hlpan=None, **answers):
+    def process(self, hltrack=None, hlpan=None, hlinv=None, **answers):
         pan_insert = []
 
         if hltrack is not None:
@@ -120,7 +124,9 @@ class HighlightTrack(MidiFilter):
                     is_selected = (midicmd.track == hltrack)
 
                     # Decrease volume if different track.
-                    if not is_selected:
+                    # (Or decrease is the highlighted track, and we're
+                    # doing the inverse.)
+                    if is_selected == hlinv:
                         assert len(midicmd.vals) == 3
                         new_volume = int(float(midicmd.vals[2]) * 0.35)
                         self.midifile.data[i] = midicmd._replace(
