@@ -30,17 +30,26 @@ class MidiFilter(object):
 
 class NoPanning(MidiFilter):
     """
-    Removes the panning command because it interferes with volume
+    Removes the panning command because it may interfere with volume
     controls.
     """
+    def has_panning(self):
+        for i, midicmd in enumerate(self.midifile.data):
+            if (midicmd.cmd == 'Control_c' and midicmd.vals[1] == '10' and
+                    midicmd.vals[2] != '64'):
+                return True
+        return False
+
     def questions(self):
-        # TODO: find panning, if there is none, then don't ask the question..
-        return (
-            Question(
-                name='nopan',
-                description='Do you wish to remove original panning?',
-                choices=((1, 'yes'), (0, 'no'))),
-        )
+        if self.has_panning():
+            return (
+                Question(
+                    name='nopan',
+                    description='Do you wish to remove original panning?',
+                    choices=((0, 'no'), (1, 'yes'))),
+            )
+        else:
+            return ()
 
     def process(self, nopan=None, **answers):
         if nopan:
@@ -70,9 +79,40 @@ class HighlightTrack(MidiFilter):
         )
 
     def process(self, hltrack=None, hlpan=None, **answers):
-        # TODO: insert initial volume if it doesn't exist?
         pan_insert = []
+
         if hltrack is not None:
+            # Check that there is an initial volume that we can change.
+            # For every Note_on-track-channel, we want a volume set.
+            track_channels = {}
+            for i, midicmd in enumerate(self.midifile.data):
+                if midicmd.cmd == 'Note_on_c':
+                    track_channel = (midicmd.track, midicmd.vals[0])
+                    if track_channel not in track_channels:
+                        track_channels[track_channel] = i
+                elif midicmd.cmd == 'Control_c' and midicmd.vals[1] == '7':
+                    track_channel = (midicmd.track, midicmd.vals[0])
+                    if track_channel not in track_channels:
+                        track_channels[track_channel] = True
+
+            # Okay, all of them with track_channels as integer, have no
+            # volume. Sort them reversed by line, so we can insert a bit
+            # of volume.
+            track_channels = [
+                (v,) + k for k, v in track_channels.items() if v is not True]
+            track_channels.sort(reverse=True)
+            for i, track, channel in track_channels:
+                # The previous line before the first Note_on_c is
+                # probably still pos '0'.
+                prev = self.midifile.data[i - 1]
+                assert prev.track == track, (i, prev.track, track)
+                self.midifile.data.insert(i, MidiCmd(
+                    track=track,
+                    pos=prev.pos,
+                    cmd='Control_c',
+                    vals=[channel, '7', '127']))
+
+            # Second run, this time we update the volume.
             for i, midicmd in enumerate(self.midifile.data):
                 if (midicmd.cmd == 'Control_c' and
                         midicmd.vals[1] == '7'):
@@ -92,6 +132,7 @@ class HighlightTrack(MidiFilter):
 
         if hlpan:
             # Append reversed, so we don't mess with the offsets.
+            assert hltrack
             pan_insert.reverse()
             for i, midicmd in pan_insert:
                 self.midifile.data.insert(i, midicmd)
