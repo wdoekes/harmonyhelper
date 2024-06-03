@@ -676,8 +676,19 @@ class MidiFile(object):
 
     def get_tracks(self):
         if 'get_tracks' not in self.cache:
-            self.cache['get_tracks'] = OrderedDict(
-                (i.track, i.vals[0]) for i in self.data if i.cmd == 'Title_t')
+            # Is there any note in these? Otherwise it could just be a
+            # tempo/control track. Ignore those.
+            tracks = OrderedDict()
+            title = title_track = None
+            for midicmd in self.data:
+                if midicmd.cmd == 'Title_t':
+                    title = midicmd.vals[0]
+                    title_track = midicmd.track
+                elif midicmd.cmd == 'Note_on_c' and title:
+                    # Assume title is first.
+                    tracks[title_track] = title
+                    title = title_track = None
+            self.cache['get_tracks'] = tracks
         return self.cache['get_tracks']
 
     def questions(self):
