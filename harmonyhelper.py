@@ -32,6 +32,45 @@ class MidiFilter(object):
         raise NotImplementedError()
 
 
+class Cleanup(MidiFilter):
+    """
+    Ensure every start note has a stop note.
+
+    Fixes incidental bugs elsewhere.
+    """
+    def questions(self):
+        return ()
+
+    def process(self, **answers):
+        self.ensure_every_on_c_has_an_off_c()
+
+    def ensure_every_on_c_has_an_off_c(self):
+        # No off_c is fine if it's at the end though.
+        data = []
+        track = None
+        open_notes = set()
+
+        for midicmd in self.midifile.data:
+            if midicmd.track != track:
+                # TODO: close open notes here?
+                open_notes = set()
+                track = midicmd.track
+            elif midicmd.cmd == 'Note_off_c':
+                if midicmd.vals[0] in open_notes:
+                    open_notes.remove(tuple(midicmd.vals[0:2]))
+            elif midicmd.cmd == 'Note_on_c':
+                if tuple(midicmd.vals[0:2]) in open_notes:
+                    data.append(MidiCmd(
+                        track=track,
+                        pos=midicmd.pos,
+                        cmd='Note_off_c',
+                        vals=(midicmd.vals[0:2] + ['0'])))
+                open_notes.add(tuple(midicmd.vals[0:2]))
+            data.append(midicmd)
+
+        self.midifile.data = data
+
+
 class NoPanning(MidiFilter):
     """
     Removes the panning command because it may interfere with volume
@@ -489,6 +528,7 @@ class OutputFormat(MidiFilter):
 
 class MidiFile(object):
     filters = (
+        Cleanup,
         NoPanning,
         HighlightTrack,
         ReplaceInstruments,
