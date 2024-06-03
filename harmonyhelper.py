@@ -7,7 +7,7 @@ import sys
 from base64 import decodebytes, encodebytes
 from collections import OrderedDict, defaultdict, namedtuple
 from io import BytesIO
-from subprocess import check_output
+from subprocess import DEVNULL, STDOUT, check_output
 from tempfile import NamedTemporaryFile
 from zlib import compress, decompress
 
@@ -30,14 +30,15 @@ class MidiFilter(object):
 
 class NoPanning(MidiFilter):
     """
-    Removes the panning command because it interferes.
+    Removes the panning command because it interferes with volume
+    controls.
     """
     def questions(self):
         # TODO: find panning, if there is none, then don't ask the question..
         return (
             Question(
                 name='nopan',
-                description='Do you wish to remove panning?',
+                description='Do you wish to remove original panning?',
                 choices=((1, 'yes'), (0, 'no'))),
         )
 
@@ -100,6 +101,9 @@ class StripChords(MidiFilter):
     """
     Lets you strip chords and leave only one of the notes.
     (For instance, if you're the low bass, you only want the low note.)
+
+    BUG: This filter does not take low notes into account that are started
+    while a high note is still playing.
     """
     def find_chords_in_tracks(self):
         on = defaultdict(list)
@@ -187,17 +191,41 @@ class StripChords(MidiFilter):
                 self.midifile.data.pop(i)
 
 
+class OutputFormat(MidiFilter):
+    """
+    Select output option: MID, MP3, CSV.
+    """
+    def questions(self):
+        return (
+            Question(
+                name='fmt',
+                description='What format should the output file have?',
+                choices=(
+                    (('mid', 'MIDI (.mid), the default'),
+                     ('mp3', ('MP3 (.mp3), an audio file suitable for '
+                              'playing on various devices '
+                              '(takes up to a minute! be patient!)')),
+                     ('csv', 'CSV (.csv), a comma separated text file')))),
+        )
+
+    def process(self, fmt=None, **answers):
+        if fmt:
+            self.midifile.set_default_outfmt(fmt)
+
+
 class MidiFile(object):
     filters = (
         NoPanning,
         HighlightTrack,
         StripChords,
+        OutputFormat,
     )
 
     def __init__(self):
         self.name = '(nameless)'
         self.cache = {}
         self.data = []
+        self._default_outfmt = 'mid'
 
     @staticmethod
     def from_line(line):
@@ -214,6 +242,17 @@ class MidiFile(object):
             return '{0.track}, {0.pos}, {0.cmd}, {1}\n'.format(
                 midicmd, ', '.join(midicmd.vals))
         return '{0.track}, {0.pos}, {0.cmd}\n'.format(midicmd)
+
+    def set_default_outfmt(self, fmt):
+        self._default_outfmt = fmt
+
+    def get_default_outfmt(self):
+        content_type = {
+            'csv': 'text/csv',
+            'mid': 'audio/midi',
+            'mp3': 'audio/mpeg',
+        }[self._default_outfmt]
+        return self._default_outfmt, content_type
 
     def export(self, fmt, outfile):
         return {
@@ -238,13 +277,52 @@ class MidiFile(object):
             self._export_mid(midifile.name)
 
     def _export_mid(self, midifilename):
+        """
+        Requires: csvmidi (midicsv package, see _load_mid)
+        """
         with NamedTemporaryFile(mode='wb', suffix='.csv') as infile:
             self.export_csv(infile)
             infile.flush()
             check_output(['csvmidi', infile.name, midifilename])
 
     def export_mp3(self, mp3file):
-        raise NotImplementedError()
+        try:
+            mp3file.fileno()
+        except OSError:
+            # Reload data onto mp3file.
+            with NamedTemporaryFile(mode='rb', suffix='.mp3') as outfile:
+                self._export_mp3(outfile.name)
+                mp3file.write(outfile.read())
+        else:
+            self._export_mp3(mp3file.name)
+
+    def _export_mp3(self, mp3file):
+        """
+        Convert to wav using timidity IN.mid -Ow -o OUT.mid. Note that we
+        require Timidity 2.13.2+ with a bug fix for
+        https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=693011
+        (the fix_right_channel_crackle.patch -- x >= n in effect.c)
+
+        Requires: manual-compiled-timidity
+        Packages: fluid-soundfont-gm
+        Config: /etc/timidity/timidity.cfg
+        > source /etc/timidity/fluidr3_gm.cfg
+
+        Then, convert to mp3, using sox with mp3 support (after first
+        determining the normalization value).
+
+        Requires: sox libsox-fmt-mp3
+        """
+        with NamedTemporaryFile(mode='rb', suffix='.wav') as wavfile:
+            with NamedTemporaryFile(mode='rb', suffix='.mid') as midifile:
+                self.export_mid(midifile)
+                check_output(['timidity', midifile.name, '-Ow',
+                              '-o', wavfile.name])
+            volume = check_output(['sox', wavfile.name, '-n', 'stat', '-v'],
+                                  stderr=STDOUT)
+            volume = float(volume.strip())
+            check_output(['sox', '-v', str(volume),
+                          wavfile.name, mp3file], stderr=DEVNULL)
 
     def load_csv(self, csvfile):
         self.cache = {}
@@ -435,19 +513,22 @@ class CgiShell(object):
 
         # Process, based on the answers.
         self.midifile.process(answers)
+
+        # Create new filename based on settings and output selection.
+        fmt, content_type = self.midifile.get_default_outfmt()
         outfile_head, outfile_tail = outfile_name.rsplit('.', 1)
         outfile_name = '{}_{}.{}'.format(
             outfile_head,
             '+'.join('{}={}'.format(i.name, i.choice) for i in sorted(answers)
-                     if i.choice),
-            outfile_tail)
+                     if i.choice and i.name != 'fmt'),
+            fmt)
 
-        # Output as midi file.
+        # Output as chosen output file type.
         out = BytesIO()
-        self.midifile.export_mid(out)
+        self.midifile.export(fmt, out)
         size = out.tell()
         out.seek(0)
-        self.out.write('Content-Type: audio/midi\r\n')
+        self.out.write('Content-Type: {}\r\n'.format(content_type))
         self.out.write('Content-Length: {}\r\n'.format(size))
         self.out.write(
             'Content-Disposition: attachment; filename="{}"\r\n'.format(
