@@ -24,7 +24,7 @@ Usage
 
 The *HarmonyHelper* has a command line and a web-interface mode.
 
-Command line:
+Command line interface:
 
 .. code-block:: console
 
@@ -37,15 +37,15 @@ Command line:
     Your choice?
     ...
 
-Web-interface::
+Web interface::
 
     Choir MID alterations: begin
 
     Upload your midi file here:
 
-    +-------------+ +--------+
-    | Choose file | | Submit |
-    +-------------+ +--------+
+    +-------------+  +--------+
+    | Choose file |  | Submit |
+    +-------------+  +--------+
 
     ---
 
@@ -56,7 +56,27 @@ Web-interface::
 
     [ ] no
     [ ] yes
+
     ...
+
+    What format should the output file have?
+
+    [ ] MIDI (.mid), the default
+    [ ] MP3 (.mp3), an audio file suitable for playing on various
+        devices (takes up to a minute! be patient!)
+    [ ] CSV (.csv), a comma separated text file
+
+    +--------+
+    | Submit |
+    +--------+
+
+Test interface:
+
+.. code-block:: console
+
+    $ RUNTESTS=1 python3 harmonyhelper.py
+    ...
+    Ran n test(s) in 0.123s
 
 
 -------------

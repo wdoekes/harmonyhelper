@@ -3,7 +3,10 @@ import cgi
 import cgitb
 import codecs
 import os
+import re
 import sys
+
+from unittest import TestCase, main as unittest_main
 
 from base64 import decodebytes, encodebytes
 from collections import OrderedDict, defaultdict, namedtuple
@@ -824,6 +827,120 @@ class CgiShell(object):
         self.out.buffer.write(out.read())  # for binary!
 
 
+class TestShell(object):
+    def __init__(self, incsv):
+        self.midifile = MidiFile()
+        self.midifile.load_csv(BytesIO(incsv))
+        self.answers = []
+
+    def set_answer(self, question_desc, answer_desc):
+        for question in self.midifile.questions():
+            if question.description == question_desc:
+                for choice_ans, choice_desc in question.choices:
+                    if choice_desc == answer_desc:
+                        self.answers.append(Answer(question.name, choice_ans))
+                        return
+                raise NotImplementedError('no such answer')
+        raise NotImplementedError('no such question')
+
+    def process(self):
+        self.midifile.process(self.answers)
+        out = BytesIO()
+        self.midifile.export_csv(out)
+        out.seek(0)
+        return out.read()
+
+
+class TestBugWithReduceNoteWhereAnotherNoteIsKept(TestCase):
+    INCSV = b'''\
+0, 0, Header, 1, 2, 480
+1, 0, Start_track
+1, 0, Title_t, "Bug: infinite note after choosing 2nd lowest"
+1, 0, Time_signature, 6, 3, 24, 8
+1, 0, Tempo, 740740
+1, 162719, Tempo, 769227
+1, 162719, End_track
+2, 0, Start_track
+2, 0, Title_t, "Bass"
+2, 0, Control_c, 5, 7, 110
+2, 0, Control_c, 5, 10, 64
+2, 2880, Unknown_meta_event, 9, 28, 77, 105, 99, 114, 111, 115, 111, 102, \
+116, 32, 71, 83, 32, 87, 97, 118, 101, 116, 97, 98, 108, 101, 32, 83, 121, \
+110, 116, 104
+2, 2880, Program_c, 5, 65
+2, 158040, Note_on_c, 5, 54, 75
+2, 158640, Note_off_c, 5, 54, 0
+2, 158640, Note_on_c, 5, 52, 75
+2, 158760, Note_off_c, 5, 52, 0
+2, 158760, Note_on_c, 5, 52, 75
+2, 159120, Note_on_c, 5, 52, 75
+2, 159480, Note_off_c, 5, 52, 0
+2, 159480, Note_on_c, 5, 40, 75
+2, 159840, Note_off_c, 5, 52, 0
+2, 159840, Note_off_c, 5, 40, 0
+2, 159840, Note_on_c, 5, 40, 75
+2, 159840, Note_on_c, 5, 47, 75
+2, 160200, Note_off_c, 5, 40, 0
+2, 160200, Note_off_c, 5, 47, 0
+2, 160200, Note_on_c, 5, 40, 75
+2, 160200, Note_on_c, 5, 47, 75
+2, 160560, Note_off_c, 5, 40, 0
+2, 160560, Note_off_c, 5, 47, 0
+2, 160560, Note_on_c, 5, 40, 75
+2, 160560, Note_on_c, 5, 47, 75
+2, 169920, End_track
+0, 0, End_of_file
+'''
+
+    OUTCSV = b'''\
+0, 0, Header, 1, 2, 480
+1, 0, Start_track
+1, 0, Title_t, "Bug: infinite note after choosing 2nd lowest"
+1, 0, Time_signature, 6, 3, 24, 8
+1, 0, Tempo, 740740
+1, 162719, Tempo, 769227
+1, 162719, End_track
+2, 0, Start_track
+2, 0, Title_t, "Bass"
+2, 0, Control_c, 5, 7, 110
+2, 0, Control_c, 5, 10, 64
+2, 2880, Unknown_meta_event, 9, 28, 77, 105, 99, 114, 111, 115, 111, 102, \
+116, 32, 71, 83, 32, 87, 97, 118, 101, 116, 97, 98, 108, 101, 32, 83, 121, \
+110, 116, 104
+2, 2880, Program_c, 5, 65
+2, 158040, Note_on_c, 5, 54, 75
+2, 158640, Note_off_c, 5, 54, 0
+2, 158640, Note_on_c, 5, 52, 75
+2, 158760, Note_off_c, 5, 52, 0
+2, 158760, Note_on_c, 5, 52, 75     # note 52 is started
+2, 159120, Note_off_c, 5, 52, 0     # ADDED TO FIX BUG: stop 52
+2, 159120, Note_on_c, 5, 52, 75     # note 52 is started again
+2, 159480, Note_off_c, 5, 52, 0     # note 52 is stopped once
+2, 159480, Note_on_c, 5, 40, 75     # note 40 is now started
+2, 159840, Note_off_c, 5, 40, 0     # must kill 52 some more..
+2, 159840, Note_on_c, 5, 47, 75
+2, 160200, Note_off_c, 5, 47, 0
+2, 160200, Note_on_c, 5, 47, 75
+2, 160560, Note_off_c, 5, 47, 0
+2, 160560, Note_on_c, 5, 47, 75
+2, 169920, End_track
+0, 0, End_of_file
+'''
+
+    maxDiff = 8192
+
+    def test_sample(self):
+        def strip_comments(value):
+            return re.sub(b'[ \t]+#[^\r\n]*', b'', value)
+
+        shell = TestShell(strip_comments(self.INCSV))
+        shell.set_answer(
+            'Do you wish to turn chords into a single note?',
+            'Reduce chords in "Bass" to the 2th lowest note')
+        out = shell.process()
+        self.assertEqual(strip_comments(self.OUTCSV).decode(), out.decode())
+
+
 if __name__ == '__main__':
     midifile = MidiFile()
     if os.environ.get('GATEWAY_INTERFACE'):
@@ -843,6 +960,8 @@ if __name__ == '__main__':
                     'Content-Type: text/html; charset=utf-8\r\n\r\n')
                 shell.started_output = True
             raise
+    elif os.environ.get('RUNTESTS', '') != '':
+        unittest_main()
     else:
         shell = CliShell(midifile, sys.argv[1], sys.argv[2])
         shell.process()
