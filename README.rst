@@ -3,19 +3,34 @@ HarmonyHelper
 
 *Convert MIDI files to CSV, MIDI or MP3.*
 
-Allows transformations like:
+Primary transformations:
 
-- Highlighting a specific track.
-- Adding metronome clicks.
-- Changing the instrument.
+- Read MIDI file, convert to MP3 (or CSV or MIDI).
+
+Optional additional transformations:
+
+- Remove left/right panning (useful for the next options);
+
+- select track to highlight (increased volume);
+
+- pan the highlighted track to the right ear;
+
+- invert highlighting (make the highlighted track *less* prominent);
+
+- convert chords into single notes by choosing either the lower or
+  higher part of the divisi;
+
+- add a metronome track (hihat);
+
+- swap out the instrument for a more clear one.
 
 This tool doesn't do anything that cannot be done with a good MIDI
 player, but it is *very* convenient.
 
-*This tool has proven useful for people practicing for a choir. They can
+**This tool has proven useful for people practicing in a choir. They can
 highlight their own track (Soprano, Alt, ...) whilst also hearing the
-context from the other parties. The conversion to MP3 makes it easy to
-practice in the car or with your favorite player.*
+context from the other parties. The conversion to MP3 makes practicing
+in the car or anywhere else easy.**
 
 
 -----
@@ -47,7 +62,7 @@ Web interface::
     | Choose file |  | Submit |
     +-------------+  +--------+
 
-    ---
+::
 
     Choir MID alterations: options
     input.mid
@@ -90,9 +105,9 @@ Dependencies:
 - *midicsv* (providing ``midicsv`` and ``csvmidi``) for conversion
   between MID and CSV;
 
-- *TiMidity++** (providing ``timidity``) for conversion to audio;
+- *TiMidity++* (providing ``timidity``) for conversion to audio;
 
-- *SoX* (provising ``sox``) for simple audio post-processing and
+- *SoX* (providing ``sox``) for simple audio post-processing and
   conversion to MP3.
 
 Enabling the web interface in *Apache2* should be as simple as::
