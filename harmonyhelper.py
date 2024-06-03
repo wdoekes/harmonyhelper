@@ -684,6 +684,13 @@ class CliShell(object):
 
         answers = self.ask_questions()
 
+        if not os.isatty(sys.stdin.fileno()):
+            print()
+            print('Answers given:')
+            for answer in answers:
+                print('-', answer)
+            print()
+
         print('Processing file {}'.format(self.infilename))
         self.midifile.process(answers)
         print()
