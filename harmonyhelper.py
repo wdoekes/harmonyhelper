@@ -801,7 +801,7 @@ class CgiShell(object):
         if in_filename.lower().endswith('.mid'):
             self.midifile.load_mid(in_filedata)
         elif in_filename.lower().endswith('.csv'):
-            self.mififile.load_csv(in_filedata)
+            self.midifile.load_csv(in_filedata)
         else:
             raise NotImplementedError('unexpected filename {filename}'.format(
                 filename=in_filename))
