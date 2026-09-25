@@ -1,24 +1,46 @@
 #!/usr/bin/env python3
-import cgi
-import cgitb
-import codecs
+import html
 import os
 import re
 import sys
-
-from unittest import TestCase, main as unittest_main
+import traceback
 
 from base64 import decodebytes, encodebytes
 from collections import OrderedDict, defaultdict, namedtuple
+from email.parser import BytesParser
+from email.policy import HTTP
 from io import BytesIO
 from subprocess import DEVNULL, STDOUT, check_output
 from tempfile import NamedTemporaryFile
+from unittest import TestCase, main as unittest_main
+from urllib.parse import parse_qsl
 from zlib import compress, decompress
 
 
+FileField = namedtuple('FileField', 'filename file')
 Question = namedtuple('Question', 'name description choices')
 Answer = namedtuple('Answer', 'name choice')
 MidiCmd = namedtuple('MidiCmd', 'track pos cmd vals')
+
+
+def parse_form(environ, stdin):
+    if environ.get('REQUEST_METHOD') != 'POST':
+        return dict(parse_qsl(environ.get('QUERY_STRING', '')))
+    ctype = environ['CONTENT_TYPE']
+    body = stdin.read(int(environ['CONTENT_LENGTH']))
+    if not ctype.startswith('multipart/form-data'):
+        return dict(parse_qsl(body.decode('ascii')))
+    msg = BytesParser(policy=HTTP).parsebytes(
+        b'Content-Type: ' + ctype.encode('ascii') + b'\r\n\r\n' + body)
+    form = {}
+    for part in msg.iter_parts():
+        name = part.get_param('name', header='content-disposition')
+        payload = part.get_payload(decode=True)
+        filename = part.get_filename()
+        form[name] = (
+            payload.decode('utf-8') if filename is None
+            else FileField(filename, BytesIO(payload)))
+    return form
 
 
 class MidiFilter(object):
@@ -797,7 +819,7 @@ class CgiShell(object):
 
     def page_questions(self):
         in_filename = self.form['midifile'].filename
-        in_filedata = BytesIO(self.form['midifile'].file.read())
+        in_filedata = self.form['midifile'].file
         if in_filename.lower().endswith('.mid'):
             self.midifile.load_mid(in_filedata)
         elif in_filename.lower().endswith('.csv'):
@@ -839,14 +861,13 @@ class CgiShell(object):
         ''')
 
     def page_process(self):
-        outfile_name = self.form.getfirst('midifile_name', 'output.mid')
-        infile_gzipped = self.form.getfirst('midicsv', '')
+        outfile_name = self.form.get('midifile_name', 'output.mid')
+        infile_gzipped = self.form.get('midicsv', '')
 
         # Combine answers.
         answers = []
-        for key in self.form.keys():
+        for key, choice in self.form.items():
             if key not in ('midifile_name', 'midicsv'):
-                choice = self.form.getfirst(key)
                 if choice.isdigit():
                     choice = int(choice)
                 else:
@@ -1011,19 +1032,14 @@ if __name__ == '__main__':
     if os.environ.get('GATEWAY_INTERFACE'):
         # Make sys.stdout utf-8 ready before creating exception trap hook.
         # #sys.stdout.reconfigure(encoding='utf-8')  # py3.7+
-        buffer_ = sys.stdout.detach()
-        sys.stdout = codecs.getwriter('utf8')(buffer_)
-        sys.stdout.buffer = buffer_
-        cgitb.enable()
-
-        shell = CgiShell(midifile, cgi.FieldStorage(), sys.stdout)
+        sys.stdout.reconfigure(encoding='utf-8')
+        shell = CgiShell(
+            midifile, parse_form(os.environ, sys.stdin.buffer), sys.stdout)
         try:
             shell.process()
         except Exception:
-            if not shell.started_output:
-                sys.stdout.write(
-                    'Content-Type: text/html; charset=utf-8\r\n\r\n')
-                shell.started_output = True
+            shell.write('<pre>{}</pre>'.format(
+                html.escape(traceback.format_exc())))
             raise
     elif os.environ.get('RUNTESTS', '') != '':
         unittest_main()
